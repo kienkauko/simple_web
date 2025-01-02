@@ -4,9 +4,6 @@ import os
 import requests
 from sys import exc_info
 from flask import Flask, render_template, request, redirect
-from opencensus.ext.azure.log_exporter import AzureLogHandler
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
 
 # Setup logging mechanism
 logging.basicConfig(
@@ -14,10 +11,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
-logger.addHandler(AzureLogHandler(
-    connection_string=os.getenv('APPLICATIONINSIGHTS_CONNECTION_STRING'))
-)
-
 
 # Setup up a Flask instance
 app = Flask(__name__)
@@ -43,34 +36,19 @@ def query_time():
         logger.error('Failed to contact public api', exc_info=True)
         return "Unavailable"
 
-# Get Key Vault secret
-def get_secret():
-
-    VAULT_NAME = os.getenv('KEY_VAULT_NAME')
-    KEY_VAULT_SECRET_NAME = os.getenv('KEY_VAULT_SECRET_NAME')
+# Check internet access
+def check_internet_access():
     try:
-        if 'MSI_CLIENT_ID':
-            credential = DefaultAzureCredential(
-                managed_identity_client_id=os.getenv('MSI_CLIENT_ID')
-            )
+        response = requests.get("https://www.google.com", timeout=5)
+        if response.status_code == 200:
+            logger.info("Internet access is available")
+            return "Internet access is available"
         else:
-            raise Exception
-    except Exception:
-        logger.error('Failed to obtain access token', exc_info=True)
-        raise Exception(
-            'Failed to obtain access token'
-        )
-
-    try:
-        secret_client = SecretClient(
-            vault_url=f"https://{VAULT_NAME}.vault.azure.net/", credential=credential)
-        secret = secret_client.get_secret(f"{KEY_VAULT_SECRET_NAME}")
-        return secret.value
-    except Exception:
-        logger.error('Failed to get secret', exc_info=True)
-        raise Exception(
-            'Failed to get secret'
-        )
+            logger.warning("Internet access is unavailable")
+            return "Internet access is unavailable"
+    except Exception as e:
+        logger.error("Failed to verify internet access", exc_info=True)
+        return "Internet access is unavailable"
 
 def get_ip(web_request):
     if 'X-Forwarded-For' in web_request.headers:
@@ -83,6 +61,8 @@ def get_ip(web_request):
 @app.route("/")
 def index():
     ipinfo = get_ip(web_request=request)
-    wordoftheday = get_secret()
     todaystime = query_time()
-    return render_template('index.html', wordoftheday=wordoftheday, time=todaystime, ip=ipinfo)
+    internet_status = check_internet_access()
+    return render_template('index.html', time=todaystime, ip=ipinfo, internet_status=internet_status)
+
+app.run(host="0.0.0.0", port=8080)
